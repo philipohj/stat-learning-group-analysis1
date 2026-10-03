@@ -3,3 +3,5 @@ title: "analysis"
 format: html
 ---
 
+Group members: Philip.
+Unfortunately it's just me cause I'm antisocial.
