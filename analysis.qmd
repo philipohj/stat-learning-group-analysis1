@@ -5,3 +5,79 @@ format: html
 
 Group members: Philip.
 Unfortunately it's just me cause I'm antisocial.
+
+Here's my mini case.
+
+##Q4
+
+##Research Question
+Does party type (Lawyer vs. Pro Se Litigant) and the court level (Federal vs. State/Tribunal) predict whether an AI hallucination incident involved completely fabricated case law?
+
+A logistic regression model is appropriate for this research question because our response variable is binary.
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+ai_raw <- read_csv("hallucination_cases.csv")
+ai_clean <- ai_raw %>%
+  filter(!is.na(`Hallucination Items`), !is.na(`Party(ies)`), !is.na(Court)) %>%
+  mutate(
+    is_fabricated_case = ifelse(str_detect(`Hallucination Items`, "Fabricated: Case Law"), 1, 0),
+    party_binary = case_when(
+      `Party(ies)` == "Lawyer" ~ "Lawyer",
+      `Party(ies)` == "Pro Se Litigant" ~ "Pro Se Litigant",
+      TRUE ~ "Other"),
+    court_level = ifelse(str_detect(Court, "D\\.|Cir|USA"), "Federal", "State/Tribunal")
+  ) %>%
+  filter(party_binary != "Other")
+```
+
+```{r}
+ggplot(ai_clean, aes(x = party_binary, fill = factor(is_fabricated_case))) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = c("blue", "yellow"), 
+                    labels = c("Other Hallucination", "Fabricated Case Law")) +
+  labs(title = "Fabricated Case Law by Party Type",
+       x = "Party Type", y = "Count of Cases", fill = "Hallucination Type") +
+  theme_minimal()
+ggplot(ai_clean, aes(x = court_level, fill = factor(is_fabricated_case))) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("blue", "yellow"), 
+                    labels = c("Other Hallucination", "Fabricated Case Law")) +
+  labs(title = "Proportion of Fabricated Case Law: Federal vs State Courts",
+       x = "Court Level", y = "Proportion", fill = "Hallucination Type") +
+  theme_minimal()
+ai_clean %>%
+  mutate(Year = str_extract(Date, "^\\d{4}")) %>%
+  filter(!is.na(Year)) %>%
+  ggplot(aes(x = Year, fill = factor(is_fabricated_case))) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("blue", "yellow"), 
+                    labels = c("Other Hallucination", "Fabricated Case Law")) +
+  labs(title = "Proportion of Fabricated Case Law Over Time",
+       x = "Year", y = "Proportion", fill = "Hallucination Type") +
+  theme_minimal()
+```
+
+##Interpreting the model
+Holding the court level constant, the estimated coefficient for party_binaryPro Se Litigant indicates the change in the log-odds of a case involving a completely fabricated citation when the party is a Pro Se Litigant opposed to a Lawyer.
+Holding the party type constant, the coefficient for court_levelState/Tribunal represents the expected change in the log-odds of encountering fabricated case law in a state court vs. a federal court
+
+##Limitations
+This relies on string matching (which was the simplest option that popped up when I google searched data wrangling methods) to categorize the hallucinations. If the database creator used slight syntax variations in their data entry, it would just fall apart. Additionally, the data is biased because pro se litigants are less likely to catch hallucinations than are established lawyers.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
