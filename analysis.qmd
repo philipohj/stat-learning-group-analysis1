@@ -4,67 +4,107 @@ format: html
 ---
 
 Group members: Philip.
-Unfortunately it's just me cause I'm antisocial.
+It is still just me. I swear I'll get friends in the class soon.
 
-Here's my mini case.
+Here's my research thingy that is late.
 
 ##Q4
 
-##Research Question
-Does party type (Lawyer vs. Pro Se Litigant) and the court level (Federal vs. State/Tribunal) predict whether an AI hallucination incident involved completely fabricated case law?
-
-A logistic regression model is appropriate for this research question because our response variable is binary.
-
-```{r message=FALSE, warning=FALSE}
+## Research question
+ 
+Do party type, court level, and year predict whether an AI hallucination incident involved completely fabricated case law?
+ 
+```{r}
+#| message: false
 library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+ 
 ai_raw <- read_csv("hallucination_cases.csv")
-ai_clean <- ai_raw %>%
-  filter(!is.na(`Hallucination Items`), !is.na(`Party(ies)`), !is.na(Court)) %>%
+ai_clean <- ai_raw |>
+  filter(!is.na(`Hallucination Items`), !is.na(`Party(ies)`), !is.na(Court), !is.na(Date)) |>
   mutate(
-    is_fabricated_case = ifelse(str_detect(`Hallucination Items`, "Fabricated: Case Law"), 1, 0),
+    is_fabricated_case = factor(ifelse(str_detect(`Hallucination Items`, "Fabricated: Case Law"), "Yes", "No")),
     party_binary = case_when(
       `Party(ies)` == "Lawyer" ~ "Lawyer",
       `Party(ies)` == "Pro Se Litigant" ~ "Pro Se Litigant",
       TRUE ~ "Other"),
-    court_level = ifelse(str_detect(Court, "D\\.|Cir|USA"), "Federal", "State/Tribunal")
-  ) %>%
-  filter(party_binary != "Other")
+    court_level = ifelse(str_detect(Court, "D\\.|Cir|USA"), "Federal", "State/Tribunal"),
+    Year = as.integer(format(Date, "%Y"))
+  ) |>
+  filter(party_binary != "Other") |>
+  mutate(across(c(party_binary, court_level), as.factor)) |>
+  select(is_fabricated_case, party_binary, court_level, Year)
+ 
+set.seed(154)
+train_id <- sample(1:nrow(ai_clean), round(0.8 * nrow(ai_clean)))
+ai_train <- ai_clean[train_id, ]
+ai_test <- ai_clean[-train_id, ]
 ```
-
+ 
+## Exploratory analysis
+ 
 ```{r}
-ggplot(ai_clean, aes(x = party_binary, fill = factor(is_fabricated_case))) +
-  geom_bar(position = "dodge") +
-  scale_fill_manual(values = c("blue", "yellow"), 
-                    labels = c("Other Hallucination", "Fabricated Case Law")) +
-  labs(title = "Fabricated Case Law by Party Type",
-       x = "Party Type", y = "Count of Cases", fill = "Hallucination Type") +
-  theme_minimal()
-ggplot(ai_clean, aes(x = court_level, fill = factor(is_fabricated_case))) +
+ggplot(ai_clean, aes(x = party_binary, fill = is_fabricated_case)) +
   geom_bar(position = "fill") +
-  scale_fill_manual(values = c("blue", "yellow"), 
-                    labels = c("Other Hallucination", "Fabricated Case Law")) +
-  labs(title = "Proportion of Fabricated Case Law: Federal vs State Courts",
-       x = "Court Level", y = "Proportion", fill = "Hallucination Type") +
-  theme_minimal()
-ai_clean %>%
-  mutate(Year = str_extract(Date, "^\\d{4}")) %>%
-  filter(!is.na(Year)) %>%
-  ggplot(aes(x = Year, fill = factor(is_fabricated_case))) +
-  geom_bar(position = "fill") +
-  scale_fill_manual(values = c("blue", "yellow"), 
-                    labels = c("Other Hallucination", "Fabricated Case Law")) +
-  labs(title = "Proportion of Fabricated Case Law Over Time",
-       x = "Year", y = "Proportion", fill = "Hallucination Type") +
+  facet_wrap(~ court_level) +
+  scale_fill_manual(values = c("blue", "yellow")) +
+  labs(title = "Fabricated Case Law by Party Type and Court Level",
+       x = "Party Type", y = "Proportion", fill = "Fabricated Case Law") +
   theme_minimal()
 ```
-
-##Interpreting the model
-Holding the court level constant, the estimated coefficient for party_binaryPro Se Litigant indicates the change in the log-odds of a case involving a completely fabricated citation when the party is a Pro Se Litigant opposed to a Lawyer.
-Holding the party type constant, the coefficient for court_levelState/Tribunal represents the expected change in the log-odds of encountering fabricated case law in a state court vs. a federal court
-
-##Limitations
-This relies on string matching (which was the simplest option that popped up when I google searched data wrangling methods) to categorize the hallucinations. If the database creator used slight syntax variations in their data entry, it would just fall apart. Additionally, the data is biased because pro se litigants are less likely to catch hallucinations than are established lawyers.
-
+ 
+```{r}
+ai_clean |> group_by(party_binary, court_level) |>
+  summarise(n = n(), prop_fabricated = mean(is_fabricated_case == "Yes"), .groups = "drop")
+```
+ 
+## Decision tree
+ 
+```{r}
+tree_fit <- rpart(is_fabricated_case ~ ., data = ai_train, method = "class",
+                  parms = list(split = "gini"))
+tree_fit
+```
+ 
+Even with the default settings, the tree makes no splits and every leaf still predicts "Yes." To see what structure there is, we force a depth-2 tree (`cp = -1`).
+ 
+```{r}
+tree_big <- rpart(is_fabricated_case ~ ., data = ai_train, method = "class",
+                  parms = list(split = "gini"),
+                  control = rpart.control(cp = -1, maxdepth = 2))
+rpart.plot(tree_big)
+```
+ 
+Cases from 2026 have a lower rate of fabricated case law (80%) than earlier cases (86%). Within 2026, lawyers' filings have fabricated case law less often (74%) than pro se filings (84%). Before 2026, federal and state courts look almost the same. Every leaf still predicts "Yes," so the tree shows differences in probability, not different predictions.
+ 
+## Random forest
+ 
+```{r}
+set.seed(154)
+rf_fit <- randomForest(is_fabricated_case ~ ., data = ai_train, ntree = 500)
+rf_fit
+```
+ 
+## Comparing the models
+ 
+```{r}
+tree_pred <- predict(tree_fit, ai_test, type = "class")
+rf_pred <- predict(rf_fit, ai_test)
+c(baseline = mean(ai_test$is_fabricated_case == "Yes"),
+  tree = mean(tree_pred == ai_test$is_fabricated_case),
+  forest = mean(rf_pred == ai_test$is_fabricated_case))
+table(Forest = rf_pred, Actual = ai_test$is_fabricated_case)
+```
+ 
+The random forest also predicts "Yes" for every case. Its out-of-bag error, 17.4%, is just the share of "No" cases. The tree, the forest, and the baseline of always predicting "Yes" all have the same test accuracy. Neither model adds predictive value, but the forest is harder to interpret.
+ 
+## Conclusions and limitations
+ 
+Fabricated case law appears in about 83% of cases regardless of party type or court level. Pro se filings have it somewhat more often than lawyers' filings (84–86% vs. 78–81%), and the rate dipped in 2026. These differences are too small to change any prediction, so a model with these predictors cannot beat simply guessing "fabricated."
+ 
+As far as limitations go, the outcome is built by string matching, same as last. Also, the database only includes publicly reported cases where hallucinations were caught, so it is not a true random sample.
 
 
 
